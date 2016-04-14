@@ -69,6 +69,59 @@ static void free_struct(struct procinfo *p)
 	}
 }
 
+static int count_maps_fds(pid_t pid)
+{
+	FILE *file;
+	int i, j;
+	char **map = NULL;
+	int count = 0, fds = 0;
+	char input[UTIL_MAX];
+	char filename[PATH_MAX];
+
+	snprintf(filename, sizeof(filename), "/proc/%d/maps", pid);
+	file = fopen(filename, "re");
+	if (file) {
+		map = calloc(UTIL_MAX, sizeof(char *));
+		if (map == NULL)
+			return -ENOMEM;
+
+		while (fgets(input, UTIL_MAX, file) != NULL) {
+			char *pos;
+
+			pos = strstr(input, "/");
+			if (pos != NULL) {
+				size_t len = strlen(pos);
+				if (pos[len - 1] == '\n')
+					pos[len - 1] = '\0';
+				map[count] = calloc(len - 1, sizeof(char *));
+				strcpy(map[count], pos);
+				count++;
+			}
+		}
+		fclose(file);
+	}
+
+	fds = count;
+	for(i = 0; i < count; i++) {
+		for(j = i + 1; j < count; j++) {
+			if (strcmp(map[i], map[j]) == 0) {
+				fds--;
+				break;
+			}
+		}
+	}
+
+	if (map) {
+		for(i = 0; i < count; i++) {
+			if (map[i])
+				free(map[i]);
+		}
+		free(map);
+	}
+
+	return fds;
+}
+
 static int set_procinfo_values(struct procinfo *p)
 {
 	FILE *file;
@@ -79,6 +132,7 @@ static int set_procinfo_values(struct procinfo *p)
 	struct dirent *dent;
 	DIR *srcdir = NULL;
 	size_t len = 0;
+	int r = 0;
 	struct passwd *pw = NULL;
 	struct group *gr = NULL;
 
@@ -97,12 +151,12 @@ static int set_procinfo_values(struct procinfo *p)
 	if ((gr = getgrgid(p->gid)) != NULL)
 		snprintf(p->group, STR_MAX, "%s", gr->gr_name);
 
-	snprintf(filename, PATH_MAX, "%s/exe", p->dir);
+	snprintf(filename, sizeof(filename), "%s/exe", p->dir);
 	len = readlink(filename, p->exe, sizeof(p->exe) - 1);
 	if (len > 0)
 		p->exe[len] = '\0';
 
-	snprintf(filename, PATH_MAX, "%s/status", p->dir);
+	snprintf(filename, sizeof(filename), "%s/status", p->dir);
 	file = fopen(filename, "re");
 	if (file) {
 		while (fgets(input, UTIL_MAX, file) != NULL) {
@@ -124,7 +178,7 @@ static int set_procinfo_values(struct procinfo *p)
 		fclose(file);
 	}
 
-	snprintf(filename, PATH_MAX, "/proc/%u/status", p->ppid);
+	snprintf(filename, sizeof(filename), "/proc/%u/status", p->ppid);
 	file = fopen(filename, "re");
 	if (file) {
 		while (fgets(input, UTIL_MAX, file) != NULL) {
@@ -138,10 +192,10 @@ static int set_procinfo_values(struct procinfo *p)
 		fclose(file);
 	}
 
-	snprintf(filename, PATH_MAX, "%s/smaps", p->dir);
+	snprintf(filename, sizeof(filename), "%s/smaps", p->dir);
 	file = fopen(filename, "re");
 	if (file) {
-		while (fgets(input, PATH_MAX, file)) {
+		while (fgets(input, UTIL_MAX, file)) {
 			char *str = strdup(input); 
 			size_t size;
 
@@ -164,7 +218,7 @@ static int set_procinfo_values(struct procinfo *p)
 	if (p->threads == NULL)
 		return -ENOMEM;
 
-	snprintf(dirname, PATH_MAX, "%s/task", p->dir);
+	snprintf(dirname, sizeof(dirname), "%s/task", p->dir);
 	srcdir = opendir(dirname);
 	if (srcdir) {
 		while ((dent = readdir(srcdir)) != NULL) {
@@ -185,7 +239,10 @@ static int set_procinfo_values(struct procinfo *p)
 		closedir(srcdir);
 	}
 
-	snprintf(dirname, PATH_MAX, "%s/fd", p->dir);
+	// inital value, we need to count ROOT and CWD as 2 FDs
+	p->fds = 2;
+
+	snprintf(dirname, sizeof(dirname), "%s/fd", p->dir);
 	srcdir = opendir(dirname);
 	if (srcdir) {
 		while ((dent = readdir(srcdir)) != NULL) {
@@ -197,6 +254,10 @@ static int set_procinfo_values(struct procinfo *p)
 		closedir(srcdir);
 	}
 
+	r = count_maps_fds(p->pid);
+	if (r > 0)
+		p->fds += r;
+
 	return 0;
 }
 
@@ -205,7 +266,7 @@ static int print_proc_info(int pid, char dir[PATH_MAX], struct procinfo *p, int 
 	int i, r = 0;
 
 	p->pid = pid;
-	snprintf(p->dir, PATH_MAX, "%s", dir);
+	snprintf(p->dir, sizeof(p->dir), "%s", dir);
 
 	if ((r = set_procinfo_values(p)) != 0) {
 		(void) fprintf(stderr, "%s: %s\n", cmd, strerror(r));
@@ -274,7 +335,7 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	snprintf(procdir, PATH_MAX, "/proc/%d", procpid);
+	snprintf(procdir, sizeof(procdir), "/proc/%d", procpid);
 	if (stat(procdir, &s) != 0) {
 		if (errno == ENOENT)
 			(void) fprintf(stderr, "%s: no such process\n", cmd);
