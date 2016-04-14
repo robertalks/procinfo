@@ -259,8 +259,7 @@ static int set_procinfo_values(struct procinfo *p)
 		closedir(srcdir);
 	}
 
-	r = count_maps_fds(p->pid);
-	if (r > 0)
+	if ((r = count_maps_fds(p->pid)) > 0)
 		p->fds += r;
 
 	return 0;
