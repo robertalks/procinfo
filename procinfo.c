@@ -74,7 +74,7 @@ static int count_maps_fds(pid_t pid)
 	FILE *file;
 	int i, j;
 	char **map = NULL;
-	int count = 0, fds = 0;
+	unsigned int count = 0, fds = 0;
 	char input[UTIL_MAX];
 	char filename[PATH_MAX];
 
@@ -94,9 +94,14 @@ static int count_maps_fds(pid_t pid)
 				if (pos[len - 1] == '\n')
 					pos[len - 1] = '\0';
 				map[count] = calloc(len - 1, sizeof(char *));
+				if (map[count] == NULL)
+					return -ENOMEM;
 				strcpy(map[count], pos);
 				count++;
 			}
+
+			if (count >= UTIL_MAX)
+				return -EOVERFLOW;
 		}
 		fclose(file);
 	}
@@ -137,7 +142,7 @@ static int set_procinfo_values(struct procinfo *p)
 	struct group *gr = NULL;
 
 	if (p->dir == NULL)
-		return -ENOMEM;
+		return -1;
 
 	if (stat(p->dir, &s) != 0)
 		return -errno;
