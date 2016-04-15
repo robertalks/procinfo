@@ -9,6 +9,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include <unistd.h>
+#include <time.h>
 
 #ifndef	PATH_MAX
   #define PATH_MAX	4096
@@ -37,6 +38,8 @@ struct procinfo {
 	char group[STR_MAX];
 	size_t vsz;
 	size_t rss;
+	time_t pid_ctime;
+	time_t pid_mtime;
 };
 
 struct procinfo *alloc_struct()
@@ -149,6 +152,8 @@ static int set_procinfo_values(struct procinfo *p)
 
 	p->uid = s.st_uid;
 	p->gid = s.st_gid;
+	p->pid_ctime = s.st_ctime;
+	p->pid_mtime = s.st_mtime;
 
 	if ((pw = getpwuid(p->uid)) != NULL)
 		snprintf(p->user, STR_MAX, "%s", pw->pw_name);
@@ -244,7 +249,7 @@ static int set_procinfo_values(struct procinfo *p)
 		closedir(srcdir);
 	}
 
-	// inital value, we need to count ROOT and CWD as 2 FDs
+	// initial value, we need to count ROOT and CWD as 2 FDs
 	p->fds = 2;
 
 	snprintf(dirname, sizeof(dirname), "%s/fd", p->dir);
@@ -263,6 +268,19 @@ static int set_procinfo_values(struct procinfo *p)
 		p->fds += r;
 
 	return 0;
+}
+
+static char *print_proc_time(time_t time)
+{
+	char *stime;
+	size_t len = 0;
+
+	stime = strdup(ctime(&time));
+	len = strlen(stime);
+	if (stime[len - 1] == '\n')
+		stime[len - 1] = '\0';
+
+	return stime;
 }
 
 static int print_proc_info(int pid, char dir[PATH_MAX], struct procinfo *p, int no_full_output)
@@ -295,6 +313,7 @@ static int print_proc_info(int pid, char dir[PATH_MAX], struct procinfo *p, int 
 	(void) fprintf(stdout, "CMD: %s\n", p->cmd);
 	(void) fprintf(stdout, "PPID: %u (%s)\n", p->ppid, p->parent_cmd);
 	(void) fprintf(stdout, "State: %c\n", p->state);
+	(void) fprintf(stdout, "Start time: %s\n", print_proc_time(p->pid_ctime));
 	(void) fprintf(stdout, "User: %s (UID: %u)\n", p->user, p->uid);
 	(void) fprintf(stdout, "Group: %s (GID: %u)\n", p->group, p->gid);
 	(void) fprintf(stdout, "VSZ: %zd MB (%zd KB)\n", p->vsz / 1024, p->vsz);
