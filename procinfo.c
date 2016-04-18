@@ -207,7 +207,7 @@ static int set_procinfo_values(struct procinfo *p)
 	if (file) {
 		while (fgets(input, UTIL_MAX, file)) {
 			char *str = strdup(input); 
-			size_t size;
+			unsigned long size;
 
 			if (strncmp(str, "Size:", 5) == 0) {
 				if (sscanf(str, "Size:\t%lu%*[^\n]", &size) == 1)
