@@ -28,6 +28,7 @@ struct procinfo {
 	char cmd[STR_MAX];
 	char parent_cmd[STR_MAX];
 	char exe[PATH_MAX];
+	char cwd[PATH_MAX];
 	char state;
 	unsigned int fds;
 	unsigned int threads_count;
@@ -58,6 +59,7 @@ struct procinfo *alloc_struct()
 	strncpy(p->cmd, default_value, sizeof(p->cmd));
 	strncpy(p->parent_cmd, default_value, sizeof(p->parent_cmd));
 	strncpy(p->exe, default_value, sizeof(p->exe));
+	strncpy(p->cwd, default_value, sizeof(p->cwd));
 	strncpy(p->user, default_value, sizeof(p->user));
 	strncpy(p->group, default_value, sizeof(p->group));
 
@@ -167,6 +169,11 @@ static int set_procinfo_values(struct procinfo *p)
 	len = readlink(filename, p->exe, sizeof(p->exe) - 1);
 	if (len > 0)
 		p->exe[len] = '\0';
+
+	snprintf(filename, sizeof(filename), "%s/cwd", p->dir);
+	len = readlink(filename, p->cwd, sizeof(p->cwd) - 1);
+	if (len > 0)
+		p->cwd[len] = '\0';
 
 	snprintf(filename, sizeof(filename), "%s/status", p->dir);
 	file = fopen(filename, "re");
@@ -323,6 +330,7 @@ static int print_proc_info(int pid, char dir[PATH_MAX], struct procinfo *p, int 
 	
 	(void) fprintf(stdout, "PID: %u\n", p->pid);
 	(void) fprintf(stdout, "EXE: %s\n", p->exe);
+	(void) fprintf(stdout, "CWD: %s\n", p->cwd);
 	(void) fprintf(stdout, "CMD: %s\n", p->cmd);
 	(void) fprintf(stdout, "PPID: %u (%s)\n", p->ppid, p->parent_cmd);
 	(void) fprintf(stdout, "State: %c\n", p->state);
