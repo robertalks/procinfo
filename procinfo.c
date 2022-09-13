@@ -41,7 +41,6 @@ struct procinfo {
 	size_t rss;
 	size_t shr;
 	time_t pid_ctime;
-	time_t pid_mtime;
 };
 
 struct procinfo *alloc_struct()
@@ -143,7 +142,8 @@ static int set_procinfo_values(struct procinfo *p)
 	struct dirent *dent;
 	DIR *srcdir = NULL;
 	size_t len = 0;
-	int r, pageSize = 0;
+	int r = 0;
+	int pageSize = sysconf(_SC_PAGESIZE);
 	struct passwd *pw = NULL;
 	struct group *gr = NULL;
 
@@ -156,8 +156,6 @@ static int set_procinfo_values(struct procinfo *p)
 	p->uid = s.st_uid;
 	p->gid = s.st_gid;
 	p->pid_ctime = s.st_ctime;
-	p->pid_mtime = s.st_mtime;
-	pageSize = sysconf(_SC_PAGESIZE);
 
 	if ((pw = getpwuid(p->uid)) != NULL)
 		snprintf(p->user, STR_MAX, "%s", pw->pw_name);
