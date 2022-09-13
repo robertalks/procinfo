@@ -3,7 +3,7 @@ CC = cc
 endif
 
 ifndef CFLAGS
-CFLAGS = -Wall -O0 -g
+CFLAGS = -Wall -O0 -g -Wformat-truncation=0
 endif
 
 ifndef DESTDIR

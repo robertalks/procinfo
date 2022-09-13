@@ -38,6 +38,7 @@ struct procinfo {
 	char group[STR_MAX];
 	size_t vsz;
 	size_t rss;
+	size_t shr;
 	time_t pid_ctime;
 	time_t pid_mtime;
 };
@@ -50,7 +51,7 @@ struct procinfo *alloc_struct()
 	if (!p)
 		return NULL;
 
-	p->pid = p->ppid = p->fds = p->threads_count = p->vsz = p->rss = 0;
+	p->pid = p->ppid = p->fds = p->threads_count = p->vsz = p->rss = p->shr = 0;
 	p->threads = NULL;
 
 	strncpy(p->dir, default_value, sizeof(p->dir));
@@ -88,7 +89,7 @@ static int count_maps_fds(pid_t pid)
 		if (map == NULL)
 			return -ENOMEM;
 
-		while (fgets(input, UTIL_MAX, file) != NULL) {
+		while (fgets(input, sizeof(input), file) != NULL) {
 			char *pos;
 
 			pos = strstr(input, "/");
@@ -140,7 +141,7 @@ static int set_procinfo_values(struct procinfo *p)
 	struct dirent *dent;
 	DIR *srcdir = NULL;
 	size_t len = 0;
-	int r = 0;
+	int r, pageSize = 0;
 	struct passwd *pw = NULL;
 	struct group *gr = NULL;
 
@@ -154,6 +155,7 @@ static int set_procinfo_values(struct procinfo *p)
 	p->gid = s.st_gid;
 	p->pid_ctime = s.st_ctime;
 	p->pid_mtime = s.st_mtime;
+	pageSize = sysconf(_SC_PAGESIZE);
 
 	if ((pw = getpwuid(p->uid)) != NULL)
 		snprintf(p->user, STR_MAX, "%s", pw->pw_name);
@@ -169,7 +171,7 @@ static int set_procinfo_values(struct procinfo *p)
 	snprintf(filename, sizeof(filename), "%s/status", p->dir);
 	file = fopen(filename, "re");
 	if (file) {
-		while (fgets(input, UTIL_MAX, file) != NULL) {
+		while (fgets(input, sizeof(input), file) != NULL) {
 			char *str = strdup(input);
 			
 			if (strncmp(str, "Name:", 5) == 0)
@@ -191,7 +193,7 @@ static int set_procinfo_values(struct procinfo *p)
 	snprintf(filename, sizeof(filename), "/proc/%u/status", p->ppid);
 	file = fopen(filename, "re");
 	if (file) {
-		while (fgets(input, UTIL_MAX, file) != NULL) {
+		while (fgets(input, sizeof(input), file) != NULL) {
 			char *str = strdup(input);
 
 			if (strncmp(str, "Name:", 5) == 0)
@@ -205,7 +207,7 @@ static int set_procinfo_values(struct procinfo *p)
 	snprintf(filename, sizeof(filename), "%s/smaps", p->dir);
 	file = fopen(filename, "re");
 	if (file) {
-		while (fgets(input, UTIL_MAX, file)) {
+		while (fgets(input, sizeof(input), file)) {
 			char *str = strdup(input); 
 			unsigned long size;
 
@@ -220,6 +222,16 @@ static int set_procinfo_values(struct procinfo *p)
 			}
 			free(str);
 		}
+		fclose(file);
+	}
+
+	snprintf(filename, sizeof(filename), "%s/statm", p->dir);
+	file = fopen(filename, "re");
+	if (file) {
+		long int dummy;
+		unsigned long size;
+		fscanf(file, "%ld %ld %ld %ld %ld %ld %ld", &dummy, &dummy, &size, &dummy, &dummy, &dummy, &dummy);
+		p->shr = (size * pageSize) / 1024;
 		fclose(file);
 	}
 
@@ -301,7 +313,8 @@ static int print_proc_info(int pid, char dir[PATH_MAX], struct procinfo *p, int 
 		(void) fprintf(stdout, "CMD: %s, ", p->cmd);
 		(void) fprintf(stdout, "State: %c, ", p->state);
 		(void) fprintf(stdout, "VSZ: %zd, ", p->vsz);
-		(void) fprintf(stdout, "RSS: %zd", p->rss);
+		(void) fprintf(stdout, "RSS: %zd, ", p->rss);
+		(void) fprintf(stdout, "SHR: %zd", p->shr);
 		(void) fprintf(stdout, "\n");
 		return 0;
 	}
@@ -318,6 +331,7 @@ static int print_proc_info(int pid, char dir[PATH_MAX], struct procinfo *p, int 
 	(void) fprintf(stdout, "Group: %s (GID: %u)\n", p->group, p->gid);
 	(void) fprintf(stdout, "VSZ: %zd MB (%zd KB)\n", p->vsz / 1024, p->vsz);
 	(void) fprintf(stdout, "RSS: %zd MB (%zd KB)\n", p->rss / 1024, p->rss);
+	(void) fprintf(stdout, "SHR: %zd MB (%zd KB)\n", p->shr / 1024, p->shr);
 	(void) fprintf(stdout, "Open FDs: %u\n", p->fds);
 	(void) fprintf(stdout, "Threads count: %u\n", p->threads_count);
 	(void) fprintf(stdout, "Threads: ");
