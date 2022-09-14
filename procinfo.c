@@ -47,15 +47,20 @@ struct procinfo {
 	time_t pid_ctime;
 };
 
-struct procinfo *alloc_struct()
+struct proclist {
+	unsigned int pid_count;
+	size_t *pids;
+};
+
+struct procinfo *procinfo_alloc()
 {
 	struct procinfo *p;
 
-	p = calloc(1, sizeof(struct procinfo));
+	p = malloc(sizeof(struct procinfo) + 1);
 	if (!p)
 		return NULL;
 
-	p->pid = p->ppid = p->fds = p->threads_count = p->vsz = p->rss = p->shr = 0;
+	p->pid = p->ppid = p->fds = p->vsz = p->rss = p->shr = p->threads_count = 0;
 	p->threads = NULL;
 
 	strncpy(p->dir, default_value, sizeof(p->dir));
@@ -69,13 +74,70 @@ struct procinfo *alloc_struct()
 	return p;
 }
 
-static void free_struct(struct procinfo *p)
+static void procinfo_free(struct procinfo *p)
 {
 	if (p) {
 		if (p->threads)
 			free(p->threads);
 		free(p);
 	}
+}
+
+struct proclist *proclist_alloc()
+{
+	struct proclist *pp;
+
+	pp = malloc(sizeof(struct proclist) + 1);
+	if (!pp)
+		return NULL;
+
+	pp->pid_count = 1;
+	pp->pids = NULL;
+
+	return pp;
+}
+
+static void proclist_free(struct proclist *pp)
+{
+	if (pp) {
+		if (pp->pids)
+			free(pp->pids);
+		free(pp);
+	}
+}
+
+static int get_proclist(struct proclist *pp)
+{
+	char dirname[PATH_MAX];
+	struct dirent *dent;
+	DIR *srcdir = NULL;
+
+	pp->pids = malloc(sizeof(size_t) + 1);
+	if (pp->pids == NULL)
+		return -ENOMEM;
+
+	snprintf(dirname, sizeof(dirname), "/proc");
+	srcdir = opendir(dirname);
+	if (srcdir) {
+		while ((dent = readdir(srcdir)) != NULL) {
+			size_t pid = 0;
+
+			if(strcmp(dent->d_name, ".") == 0 || strcmp(dent->d_name, "..") == 0)
+				continue;
+
+			if (isdigit(dent->d_name[0]) && dent->d_type == DT_DIR) {
+				pid = (size_t) strtol(dent->d_name, NULL, 10);
+				if (pid > 0) {
+					pp->pids[pp->pid_count] = pid;
+					pp->pid_count++;
+					pp->pids = realloc(pp->pids, (pp->pid_count + 1) * sizeof(size_t));
+				}
+			}
+		}
+		closedir(srcdir);
+	}
+
+	return 0;
 }
 
 static int count_maps_fds(pid_t pid)
@@ -90,7 +152,7 @@ static int count_maps_fds(pid_t pid)
 	snprintf(filename, sizeof(filename), "/proc/%d/maps", pid);
 	file = fopen(filename, "re");
 	if (file) {
-		map = calloc(UTIL_MAX, sizeof(char *));
+		map = malloc(sizeof(char *) * UTIL_MAX);
 		if (map == NULL)
 			return -ENOMEM;
 
@@ -102,7 +164,7 @@ static int count_maps_fds(pid_t pid)
 				size_t len = strlen(pos);
 				if (pos[len - 1] == '\n')
 					pos[len - 1] = '\0';
-				map[count] = calloc(len - 1, sizeof(char *));
+				map[count] = malloc(sizeof(char *) * len -1);
 				if (map[count] == NULL)
 					return -ENOMEM;
 				strcpy(map[count], pos);
@@ -200,6 +262,9 @@ static int set_procinfo_values(struct procinfo *p)
 		fclose(file);
 	}
 
+	if (strcmp(p->exe, "none") == 0)
+		strncpy(p->exe, p->cmd, sizeof(p->exe));
+
 	snprintf(filename, sizeof(filename), "/proc/%u/status", p->ppid);
 	file = fopen(filename, "re");
 	if (file) {
@@ -280,7 +345,7 @@ static int set_procinfo_values(struct procinfo *p)
 	}
 
 	p->threads_count = 0;
-	p->threads = calloc(1, sizeof(size_t));
+	p->threads = malloc(sizeof(size_t) + 1);
 	if (p->threads == NULL)
 		return -ENOMEM;
 
@@ -339,7 +404,7 @@ static char *print_proc_time(time_t time)
 	return stime;
 }
 
-static int print_proc_info(int pid, char dir[PATH_MAX], struct procinfo *p, int no_full_output)
+static int print_proc_info(unsigned long pid, char dir[PATH_MAX], struct procinfo *p, int no_full_output)
 {
 	int i, r = 0;
 	unsigned hh, mm, ss;
@@ -359,11 +424,13 @@ static int print_proc_info(int pid, char dir[PATH_MAX], struct procinfo *p, int 
 	if (no_full_output == 1) {
 		(void) fprintf(stdout, "PID: %u, ", p->pid);
 		(void) fprintf(stdout, "PPID: %u, ", p->ppid);
-		(void) fprintf(stdout, "CMD: %s, ", p->cmd);
 		(void) fprintf(stdout, "State: %c, ", p->state);
-		(void) fprintf(stdout, "VSZ: %zd, ", p->vsz);
-		(void) fprintf(stdout, "RSS: %zd, ", p->rss);
-		(void) fprintf(stdout, "SHR: %zd", p->shr);
+		(void) fprintf(stdout, "FDs: %u, ", p->fds);
+		(void) fprintf(stdout, "VSZ: %zdMB, ", p->vsz / 1024);
+		(void) fprintf(stdout, "RSS: %zdMB, ", p->rss / 1024);
+		(void) fprintf(stdout, "SHR: %zdMB, ", p->shr / 1024);
+		(void) fprintf(stdout, "TIME: %02u:%02u:%02u, ", hh, mm, ss);
+		(void) fprintf(stdout, "CMD: %s", p->exe);
 		(void) fprintf(stdout, "\n");
 		return 0;
 	}
@@ -405,43 +472,59 @@ int main(int argc, char *argv[])
 	pid_t procpid;
 	char procdir[PATH_MAX];
 	struct stat s;
-	struct procinfo *ptr;
+	struct procinfo *p;
+	struct proclist *pp;
 
 	if (argc <= 1) {
-		(void) fprintf(stderr, "%s: you must supply the PID number of a process\n", cmd);
-		return 1;
+		pp = proclist_alloc();
+		if (!pp) {
+			(void) fprintf(stderr, "%s: failed to allocate memory for structure.\n", cmd);
+			return ENOMEM;
+		}
+
+		if (get_proclist(pp) == 0) {
+			for(unsigned int list = 1; list < pp->pid_count; list++) {
+				snprintf(procdir, sizeof(procdir), "/proc/%lu", pp->pids[list]);
+				p = procinfo_alloc();
+				if (!p) {
+					(void) fprintf(stderr, "%s: failed to allocate memory for structure.\n", cmd);
+					return ENOMEM;
+				}
+
+				print_proc_info(pp->pids[list], procdir, p, 1);
+				procinfo_free(p);
+			}
+		}
+		proclist_free(pp);
+	} else {
+		if (!argv[1]) {
+			(void) fprintf(stderr, "%s: empty argument", cmd);
+			return 1;
+		}
+
+		procpid = (pid_t) strtol(argv[1], NULL, 10);
+		if (procpid <= 0) {
+			(void) fprintf(stderr, "%s: PID cant be 0 or a negative value\n", cmd);
+			return 1;
+		}
+
+		snprintf(procdir, sizeof(procdir), "/proc/%d", procpid);
+		if (stat(procdir, &s) != 0) {
+			if (errno == ENOENT)
+				(void) fprintf(stderr, "%s: no such process\n", cmd);
+			else
+				(void) fprintf(stderr, "%s: %s\n", cmd, strerror(errno));
+
+			return errno;
+		}
+		p = procinfo_alloc();
+		if (!p) {
+			(void) fprintf(stderr, "%s: failed to allocate memory for structure.\n", cmd);
+			return ENOMEM;
+		}
+		print_proc_info(procpid, procdir, p, 0);
+		procinfo_free(p);
 	}
-
-	if (!argv[1]) {
-		(void) fprintf(stderr, "%s: empty argument", cmd);
-		return 1;
-	}
-
-	procpid = (pid_t) strtol(argv[1], NULL, 10);
-	if (procpid <= 0) {
-		(void) fprintf(stderr, "%s: PID cant be 0 or a negative value\n", cmd);
-		return 1;
-	}
-
-	snprintf(procdir, sizeof(procdir), "/proc/%d", procpid);
-	if (stat(procdir, &s) != 0) {
-		if (errno == ENOENT)
-			(void) fprintf(stderr, "%s: no such process\n", cmd);
-		else
-			(void) fprintf(stderr, "%s: %s\n", cmd, strerror(errno));
-
-		return errno;
-	}
-
-	ptr = alloc_struct();
-	if (!ptr) {
-		(void) fprintf(stderr, "%s: failed to allocate memory for structure.\n", cmd);
-		return ENOMEM;
-	}
-
-	print_proc_info(procpid, procdir, ptr, 0);
-
-	free_struct(ptr);
 
 	return 0;
 }
