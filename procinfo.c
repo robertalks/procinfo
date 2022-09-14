@@ -18,6 +18,9 @@
 #define STR_MAX		256
 #define UTIL_MAX	16384
 
+#define TICKS		sysconf(_SC_CLK_TCK)
+#define PAGESIZE	sysconf(_SC_PAGESIZE)
+
 static const char *cmd = "procinfo";
 static const char *default_value = "none";
 
@@ -40,6 +43,7 @@ struct procinfo {
 	size_t vsz;
 	size_t rss;
 	size_t shr;
+	unsigned long long cpu_sec;
 	time_t pid_ctime;
 };
 
@@ -143,7 +147,8 @@ static int set_procinfo_values(struct procinfo *p)
 	DIR *srcdir = NULL;
 	size_t len = 0;
 	int r = 0;
-	int pageSize = sysconf(_SC_PAGESIZE);
+	char *token;
+	const char delim[2] = " ";
 	struct passwd *pw = NULL;
 	struct group *gr = NULL;
 
@@ -233,10 +238,44 @@ static int set_procinfo_values(struct procinfo *p)
 	snprintf(filename, sizeof(filename), "%s/statm", p->dir);
 	file = fopen(filename, "re");
 	if (file) {
-		long int dummy;
+		unsigned count = 0;
 		unsigned long size;
-		fscanf(file, "%ld %ld %ld %ld %ld %ld %ld", &dummy, &dummy, &size, &dummy, &dummy, &dummy, &dummy);
-		p->shr = (size * pageSize) / 1024;
+		if (fgets(input, sizeof(input), file) != NULL) {
+			char *str = strdup(input);
+			token = strtok(str, delim);
+			count++;
+			while (token != NULL) {
+				token = strtok(NULL, delim);
+				count++;
+				if (count == 3) {
+					size = atoi(token);
+					break;
+				}
+			}
+			p->shr = (size * PAGESIZE) / 1024;
+		}
+		fclose(file);
+	}
+
+	snprintf(filename, sizeof(filename), "%s/stat", p->dir);
+	file = fopen(filename, "re");
+	if (file) {
+		unsigned count = 0;
+		unsigned long long utime = 0, stime = 0;
+		if (fgets(input, sizeof(input), file) != NULL) {
+			char *str = strdup(input);
+			token = strtok(str, delim);
+			count++;
+			while (token != NULL) {
+				token = strtok(NULL, delim);
+				count++;
+				if (count == 14)
+					utime = atoi(token);
+				if (count == 15)
+					stime = atoi(token);
+			}
+			p->cpu_sec = (utime + stime) / TICKS;
+		}
 		fclose(file);
 	}
 
@@ -303,6 +342,7 @@ static char *print_proc_time(time_t time)
 static int print_proc_info(int pid, char dir[PATH_MAX], struct procinfo *p, int no_full_output)
 {
 	int i, r = 0;
+	unsigned hh, mm, ss;
 
 	p->pid = pid;
 	snprintf(p->dir, sizeof(p->dir), "%s", dir);
@@ -311,6 +351,10 @@ static int print_proc_info(int pid, char dir[PATH_MAX], struct procinfo *p, int 
 		(void) fprintf(stderr, "%s: %s\n", cmd, strerror(r));
 		return -1;
 	}
+
+	hh = (p->cpu_sec/3600);
+	mm = (p->cpu_sec - (3600 * hh)) / 60;
+	ss = (p->cpu_sec - (3600 * hh) - (mm * 60));
 
 	if (no_full_output == 1) {
 		(void) fprintf(stdout, "PID: %u, ", p->pid);
@@ -333,6 +377,7 @@ static int print_proc_info(int pid, char dir[PATH_MAX], struct procinfo *p, int 
 	(void) fprintf(stdout, "PPID: %u (%s)\n", p->ppid, p->parent_cmd);
 	(void) fprintf(stdout, "State: %c\n", p->state);
 	(void) fprintf(stdout, "Start time: %s\n", print_proc_time(p->pid_ctime));
+	(void) fprintf(stdout, "CPU time: %02u:%02u:%02u\n", hh, mm, ss);
 	(void) fprintf(stdout, "User: %s (UID: %u)\n", p->user, p->uid);
 	(void) fprintf(stdout, "Group: %s (GID: %u)\n", p->group, p->gid);
 	(void) fprintf(stdout, "VSZ: %zd MB (%zd KB)\n", p->vsz / 1024, p->vsz);
